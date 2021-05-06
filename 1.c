@@ -1,5 +1,17 @@
-//lab1
-
+/*
+ * lab1
+ * {
+ * du/dt + FuncA * du/dx = FuncF,
+ * x = (0, MAX_X], t = (0, MAX_TIME],
+ * u|(x=0) = exp(-t), u|(t=0) = cos(pi*x) 
+ * }
+ * rectangle scheme:
+ * <--->
+ * ^   ^
+ * |   |
+ * <--->
+ * with o(t^2 + x^2)
+*/
 #include <stdio.h>
 #include <stdlib.h>
 #include <mpi.h>
@@ -17,14 +29,12 @@
 
 
 const double PI = 3.141592653589;
-//const double MAGIC    = 1000;
 const int    MAX_PROC = 28;
-const long   T_STEPS  = 100000;
-const int    X_STEPS  = 100;
+const long   T_STEPS  = 16000;
+const int    X_STEPS  = 8000;
 const double MAX_TIME = 1.0; // t is from 0 to MAX_TIME
 const double MAX_X    = 1.0; // x is from 0 to MAX_X
 
-//long   get_N(int, char*[]);
 void   close_all_connections(int);
 double worker(int, int, int);
 double FuncU_T0(double);
@@ -47,8 +57,7 @@ int main(int argc, char *argv[])
 	int src = rank - 1;
 	if (src == -1)
 		src = MPI_PROC_NULL;
-
-	//DBG printf("size %d, rank %d, dest %d, src %d\n\n", size, rank, dest, src);
+	DBG printf("size %d, rank %d, dest %d, src %d\n\n", size, rank, dest, src);
 
 	double t_step = MAX_TIME / T_STEPS;
 	double x_step = MAX_X / X_STEPS;
@@ -58,39 +67,23 @@ int main(int argc, char *argv[])
 
 		//giving tasks
 		MPI_Request requests     [MAX_PROC];
-		//MPI_Request requests_recv[MAX_PROC];
-		//int flags     [MAX_PROC];
-		//int flags_recv[MAX_PROC];
 
 		for (int i = 0; i < size - 1; ++i)
-		{
-			//flags        [i] = 0;
-			//flags_recv   [i] = 0;
-			//res          [i] = 0;
-			requests     [i] = MPI_REQUEST_NULL;
-			//requests_recv[i] = MPI_REQUEST_NULL;
-		}
+			requests [i] = MPI_REQUEST_NULL; //no need actually as i dont use it
 
 		int worker_starts[MAX_PROC]; // left step-boundary x-axis 
 		worker_starts[0] = 0;
-		/* right - left step-boundaries x-axis aka num of operations per worker */
+
+		/* (right - left) step-boundaries x-axis aka num of steps per worker */
 		int worker_sizes [MAX_PROC];
-		int iteration = X_STEPS;
+
 		int not_given_x = X_STEPS + size;
 		int not_given_workers = size;
+
 		double starttime = MPI_Wtime();
 
 		for (int i = 0; i < size; ++i)
 		{
-			/*
-			if (iteration % (size - i) != 0)
-				worker_sizes[i] = iteration / size + 2;
-			else 
-				worker_sizes[i] = iteration / (size - i) + 1;
-			iteration -= worker_sizes[i] - 1;
-			*/	
-
-			
 			worker_sizes[i] = (not_given_x / not_given_workers); 
 			not_given_x -= worker_sizes[i];
 			not_given_workers --;
@@ -107,11 +100,11 @@ int main(int argc, char *argv[])
 		DBG printf("DBG: master gave tasks\n");
 
 
-		// master act like a worker
-		
+		// master acts like a worker
 
 		MPI_Request request; // empty request
 		MPI_Status status;   // empty status
+
 		double** result_table = (double**) calloc((X_STEPS + 1), sizeof(double*));
 		for (int i = 0; i <= X_STEPS; ++i) 
 			result_table[i] = (double*) calloc((T_STEPS + 1), sizeof(double));
@@ -120,7 +113,8 @@ int main(int argc, char *argv[])
 			result_table[0][i] = FuncU_T0(i * t_step);	
 		for (int i = 0; i <= X_STEPS; ++i)
 			result_table[i][0] = FuncU_X0(i * x_step);
-		DBG printf("m  ops: %ld\n", (long) T_STEPS * (worker_sizes[0]-1));
+
+		DBG printf("master loop ops: %ld\n", (long) T_STEPS * (worker_sizes[0]-1));
 
 		for (int t = 0; t < T_STEPS; ++t)
 		{
@@ -132,37 +126,23 @@ int main(int argc, char *argv[])
 						       (result_table[x-1][t] - result_table[x-1][t+1] + result_table[x][t]) /
 						       (2 * t_step));
 			MPI_Isend(&result_table[worker_sizes[0]-1][t+1], 1, MPI_DOUBLE, dest, 2, MPI_COMM_WORLD, &request);
-			//DBG printf("master isent to %d: %.3f\n", dest, result_table[worker_sizes[0]-1][t+1]);
+			DBG printf("master isent to %d: %.3f\n", dest, result_table[worker_sizes[0]-1][t+1]);
 		}
 		DBG printf("DBG: master did his job B-)\n\n");
-
-		/*
-		if (size == 1) {
-			for (int x = 0; x <= X_STEPS; ++x) 
-			{
-				for (int t = 0; t <= T_STEPS; ++t) 
-					DBG printf("%.3f ", result_table[x][t]);
-				DBG printf("\n");
-			}
-		}		
-		*/
 
 		// collect status and wait for result
 
 		for (int i = 0; i < size - 1; ++i)
-			for (int j = worker_starts[i+1] + 1; j < worker_starts[i+1] + worker_sizes[i+1]; ++j) {
-				//DBG printf("master final waits from %d\n", i);
-				//printf("pointer %p\n", result_table[j]);
+			for (int j = worker_starts[i+1] + 1; j < worker_starts[i+1] + worker_sizes[i+1]; ++j)
 				MPI_Recv(result_table[j], T_STEPS+1, MPI_DOUBLE, i + 1, 3, MPI_COMM_WORLD, &status);
-				//DBG printf("master final recved from %d\n", i+1);
-			}
+
 		double endtime = MPI_Wtime();
 		printf("elapsed time: %f\n\n", endtime-starttime);
 
 
 		//printing the results 
 
-/*
+		/*
 		FILE* fout = stdout;
 		for (int t = 0; t <= T_STEPS; ++t)
 		{
@@ -173,8 +153,8 @@ int main(int argc, char *argv[])
 			}
 			fprintf(fout, "\n");
 		}
-		//fclose(fout);
-*/
+		*/
+
 		// free allocated memory 
 		for (int i = 0; i <= X_STEPS; ++i) 
 			free(result_table[i]);
@@ -185,12 +165,12 @@ int main(int argc, char *argv[])
 		// worker
 		MPI_Status status;
 		MPI_Request request;
+
 		int this_start, this_size;
 		MPI_Recv(&this_start, 1, MPI_INT, 0, 1, MPI_COMM_WORLD, &status);
 		MPI_Recv(&this_size, 1, MPI_INT, 0, 1, MPI_COMM_WORLD, &status);
 		
-		//DBG printf("DBG: worker%d recv: start%d, size%d\n", rank, this_start, this_size);
-		//DBG printf("DBG: w#%d src: %d, dest %d\n", rank, src, dest);
+		DBG printf("DBG: w#%d src: %d, dest %d\n", rank, src, dest);
 
 		double** table = (double**) calloc(this_size, sizeof(double*));
 		for (int i = 0; i < this_size; i++)
@@ -202,9 +182,7 @@ int main(int argc, char *argv[])
 		DBG printf("w#%d ops: %ld\n", rank, (long) T_STEPS * (this_size-1));
 		for (int t = 0; t < T_STEPS; ++t)
 		{
-			//DBG printf("w#%d waits from %d\n", rank, src);
 			MPI_Recv(&table[0][t+1], 1, MPI_DOUBLE, src, 2, MPI_COMM_WORLD, &status);
-			//DBG printf("w#%d recved from %d\n", rank, src);
 			for (int x = 1; x < this_size; ++x) 
 			{
 				int abs_x = x + this_start; // absolute x (as it will be in result_table)
@@ -216,15 +194,11 @@ int main(int argc, char *argv[])
 			
 
 			}
-			//DBG printf("\n\nWOOOOOOOOOOOOOOOORKER %f\n\n", table[this_size-1][t+1]);
 			MPI_Isend(&table[this_size-1][t+1], 1, MPI_DOUBLE, dest, 2, MPI_COMM_WORLD, &request);
-			//DBG printf("w#%d sent to %d\n", rank, dest);
 		}
 			
-		for (int x = 1; x < this_size; ++x) {
+		for (int x = 1; x < this_size; ++x)
 			MPI_Send(table[x], T_STEPS+1, MPI_DOUBLE, 0, 3, MPI_COMM_WORLD);
-			//DBG printf("w#%d final sent to master\n", rank);
-		}
 
 		for (int i = 0; i < this_size; ++i)
 			free(table[i]);
@@ -256,21 +230,3 @@ double FuncA()
 {
 	return 2;
 }
-
-/*
-long get_N(int argc, char* argv[])
-{
-        if (argc != 2)
-                return -1;
-
-        char* endptr = NULL;
-        long ret = strtol(argv[1], &endptr, 10);
-
-        if ((errno == ERANGE && errno == EINVAL) || *endptr != '\0')
-        {
-                return -1;
-        }
-
-        return ret;
-}
-*/
